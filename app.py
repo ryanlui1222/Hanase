@@ -111,8 +111,10 @@ with tabs[1]:
                 # 更新進度條
                 progress_bar.progress((idx + 1) / len(pending_items))
                 
-            st.success("批次處理完畢！")
-            st.rerun()
+            st.success("批次處理執行完畢！請查看上方是否有錯誤訊息。")
+            # 移除 st.rerun()，改為提供一個手動刷新按鈕
+            if st.button("🔄 重新載入畫面以更新名單"):
+                st.rerun()
 
 # --- 分頁 3：複習 ---
 with tabs[2]:
