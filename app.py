@@ -168,18 +168,33 @@ with tabs[2]:
     else:
         st.info("太棒了！目前的單字都已經複習完畢。去閱讀更多文章吧！")
 
-# --- 分頁 4：總覽 (支援顯示暫停狀態) ---
+# --- 分頁 4：總覽 (進化版：專注篩選與互動編輯) ---
 with tabs[3]:
     st.subheader("📚 我的多語字庫")
     
-    # 抓取條件加入 'paused'
-    all_words = supabase.table("vocabulary").select("*").in_("status", ["learning", "mastered", "paused"]).execute().data
+    # 【UI 方案】頂部新增「快速篩選器」，解決溫習需求
+    filter_option = st.radio(
+        "快速篩選：", 
+        ["全部單字", "🧠 僅顯示學習中", "⏸️ 僅顯示暫停", "✅ 僅顯示已掌握"], 
+        horizontal=True
+    )
+    
+    # 根據篩選器決定要向資料庫要什麼資料
+    if filter_option == "🧠 僅顯示學習中":
+        status_filter = ["learning"]
+    elif filter_option == "⏸️ 僅顯示暫停":
+        status_filter = ["paused"]
+    elif filter_option == "✅ 僅顯示已掌握":
+        status_filter = ["mastered"]
+    else:
+        status_filter = ["learning", "mastered", "paused"]
+
+    all_words = supabase.table("vocabulary").select("*").in_("status", status_filter).execute().data
     
     if all_words:
         import pandas as pd
         data_list = []
         for w in all_words:
-            # 狀態視覺化判斷
             if w['status'] == "mastered":
                 status_icon = "✅ 掌握"
             elif w['status'] == "paused":
@@ -188,6 +203,7 @@ with tabs[3]:
                 status_icon = "🧠 學習中"
                 
             data_list.append({
+                "db_id": w['id'], # 隱藏的資料庫 ID，用於回傳更新
                 "狀態": status_icon,
                 "生字": w.get('original_word', ''),
                 "原型": w.get('prototype', ''),
@@ -199,7 +215,7 @@ with tabs[3]:
             })
         
         df = pd.DataFrame(data_list)
-        st.write("💡 **溫習小撇步：** 點擊下方核取方塊來隱藏/顯示特定欄位。")
+        st.write("💡 **操作提示：** 點擊「狀態」欄位可直接切換單字狀態。更改後請點擊下方按鈕儲存。")
         
         fixed_columns = ["狀態", "生字", "原型", "中文", "英文", "日文", "西文", "例句"]
         cols = st.columns(len(fixed_columns))
@@ -211,8 +227,46 @@ with tabs[3]:
                     selected_cols.append(col_name)
 
         if selected_cols:
-            st.dataframe(df[selected_cols], use_container_width=True)
+            # 確保 "db_id" 和 "狀態" 始終在 dataframe 裡運作
+            cols_to_show = ["db_id"] + selected_cols if "狀態" in selected_cols else ["db_id", "狀態"] + selected_cols
+            
+            # 使用 st.data_editor 取代原本的 st.dataframe
+            edited_df = st.data_editor(
+                df[cols_to_show],
+                column_config={
+                    "db_id": None, # 將 ID 欄位隱藏，不讓使用者看到
+                    "狀態": st.column_config.SelectboxColumn(
+                        "狀態 (點擊修改)",
+                        help="選擇單字的學習狀態",
+                        options=["🧠 學習中", "✅ 掌握", "⏸️ 暫停"],
+                        required=True
+                    )
+                },
+                # 設定除了「狀態」以外，其他欄位禁止修改以免誤觸
+                disabled=["生字", "原型", "中文", "英文", "日文", "西文", "例句"],
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # 建立一個儲存按鈕來批次更新狀態
+            if st.button("💾 儲存所有狀態變更", type="primary"):
+                with st.spinner("更新資料庫中..."):
+                    # 比對原始 df 和 edited_df，找出被修改的狀態
+                    for index, row in edited_df.iterrows():
+                        orig_status = df.loc[index, "狀態"]
+                        new_status = row["狀態"]
+                        
+                        if orig_status != new_status:
+                            # 將 Emoji 轉換回資料庫看得懂的英文
+                            status_map = {"🧠 學習中": "learning", "✅ 掌握": "mastered", "⏸️ 暫停": "paused"}
+                            db_status = status_map.get(new_status, "learning")
+                            
+                            # 更新至 Supabase
+                            supabase.table("vocabulary").update({"status": db_status}).eq("id", row["db_id"]).execute()
+                            
+                    st.success("狀態已成功更新！")
+                    st.rerun() # 重新整理畫面顯示最新結果
         else:
             st.warning("請至少保留一個欄位以顯示表格。")
     else:
-        st.write("目前字庫空空如也，快去收集單字吧！")
+        st.info("這個分類下目前沒有單字喔！")
