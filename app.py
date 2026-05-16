@@ -33,12 +33,13 @@ def hanase_ai_process(word):
     2. "prototype": 提供該字的原型。
     3. "translations": 提供四語精確翻譯，格式為 {{"zh": "中文", "en": "英文", "ja": "日文", "es": "西文"}}。
        ⚠️ 關鍵要求：日文翻譯若包含漢字，請務必在漢字後方的括號內標註「平假名」讀音（振假名），例如：膨大(ぼうだい)する。絕對不要使用羅馬拼音。
-    4. "cloze_sentence": 根據使用者的學術背景，造一個具深度的例句。並將該單字或其變體以 "____" 替代。
+    4. "cloze_sentence": 根據使用者的學術背景，造一個具深度的例句。
+       ⚠️ 極重要限制：例句「必須」使用該生字所屬的原始語言撰寫！（例如：該生字為日文，就必須造日文例句；生字為西文，就造西文例句）。並將該單字或其變體以 "____" 替代。
     5. "sentence_zh": 該例句的中文翻譯。
     """
     
     try:
-        # 【新版接駁方式】使用 client.models.generate_content 並指定 gemini-2.5-flash
+        # 使用 client.models.generate_content 並指定 gemini-2.5-flash
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt,
@@ -99,24 +100,25 @@ with tabs[1]:
                     if result:
                         try:
                             # 【防禦 2：語意重複檢查】
-                            # 使用 AI 翻譯出來的「中文意義」去比對庫中是否已有相同概念的單字
                             zh_meaning = result['translations'].get('zh', '')
-                            # 尋找除了自己 (pending) 以外，是否有其他字擁有相同的中文翻譯
                             dupes = supabase.table("vocabulary").select("original_word").eq("trans_zh", zh_meaning).neq("id", item['id']).execute().data
                             
                             if dupes:
-                                # 發現語意重複！直接刪除這個 pending 的待處理字
                                 supabase.table("vocabulary").delete().eq("id", item['id']).execute()
                                 status.update(label=f"⚠️ '{item['original_word']}' 與庫中已有的 '{dupes[0]['original_word']}' 意義相同，已自動剔除。", state="error")
                             else:
-                                # 沒有重複，正常更新資料庫
+                                # 【縫合例句與翻譯】
+                                cloze = result.get('cloze_sentence', '')
+                                zh_trans = result.get('sentence_zh', '')
+                                combined_sentence = f"{cloze}\n\n{zh_trans}"
+
                                 update_response = supabase.table("vocabulary").update({
                                     "prototype": result.get('prototype', ''),
                                     "trans_zh": zh_meaning,
                                     "trans_en": result['translations'].get('en', ''),
                                     "trans_ja": result['translations'].get('ja', ''),
                                     "trans_es": result['translations'].get('es', ''),
-                                    "example_sentence": result.get('cloze_sentence', ''),
+                                    "example_sentence": combined_sentence, # 寫入合併後的雙語例句
                                     "status": "learning"
                                 }).eq("id", item['id']).execute()
                                 
@@ -135,20 +137,20 @@ with tabs[1]:
             if st.button("🔄 重新載入畫面以更新名單"):
                 st.rerun()
 
-# --- 分頁 3：複習 (加入暫停按鈕) ---
+# --- 分頁 3：複習 (支援 Markdown 換行渲染) ---
 with tabs[2]:
     st.subheader("主動回憶挑戰")
-    # 確保系統只會抓取 learning 狀態的字，排除了 paused
     review_data = supabase.table("vocabulary").select("*").eq("status", "learning").limit(1).execute().data
     
     if review_data:
         word_data = review_data[0]
         st.info(f"**中文意：** {word_data['trans_zh']}")
-        st.write(f"**情境挑戰：** {word_data['example_sentence']}")
+        
+        # 使用 markdown 來完美渲染我們剛才縫合的 \n\n 換行符號
+        st.markdown(f"**情境挑戰：**\n\n{word_data['example_sentence']}")
         
         ans = st.text_input("請填入單詞 (原型或變化型皆可)：", key="review_input")
         
-        # 使用並排按鈕，讓操作更直覺
         col1, col2 = st.columns(2)
         with col1:
             if st.button("檢查答案", type="primary"):
@@ -160,7 +162,6 @@ with tabs[2]:
                 else:
                     st.error(f"再試一次！提示：原型是 {word_data['prototype']} / 原始記錄是 {word_data['original_word']}")
         with col2:
-            # 新增的暫停按鈕
             if st.button("⏸️ 這字我太熟了，暫停複習"):
                 supabase.table("vocabulary").update({"status": "paused"}).eq("id", word_data['id']).execute()
                 st.toast("已將單字移入暫停區！")
@@ -172,14 +173,12 @@ with tabs[2]:
 with tabs[3]:
     st.subheader("📚 我的多語字庫")
     
-    # 【UI 方案】頂部新增「快速篩選器」，解決溫習需求
     filter_option = st.radio(
         "快速篩選：", 
         ["全部單字", "🧠 僅顯示學習中", "⏸️ 僅顯示暫停", "✅ 僅顯示已掌握"], 
         horizontal=True
     )
     
-    # 根據篩選器決定要向資料庫要什麼資料
     if filter_option == "🧠 僅顯示學習中":
         status_filter = ["learning"]
     elif filter_option == "⏸️ 僅顯示暫停":
@@ -203,7 +202,7 @@ with tabs[3]:
                 status_icon = "🧠 學習中"
                 
             data_list.append({
-                "db_id": w['id'], # 隱藏的資料庫 ID，用於回傳更新
+                "db_id": w['id'], 
                 "狀態": status_icon,
                 "生字": w.get('original_word', ''),
                 "原型": w.get('prototype', ''),
@@ -227,14 +226,12 @@ with tabs[3]:
                     selected_cols.append(col_name)
 
         if selected_cols:
-            # 確保 "db_id" 和 "狀態" 始終在 dataframe 裡運作
             cols_to_show = ["db_id"] + selected_cols if "狀態" in selected_cols else ["db_id", "狀態"] + selected_cols
             
-            # 使用 st.data_editor 取代原本的 st.dataframe
             edited_df = st.data_editor(
                 df[cols_to_show],
                 column_config={
-                    "db_id": None, # 將 ID 欄位隱藏，不讓使用者看到
+                    "db_id": None, 
                     "狀態": st.column_config.SelectboxColumn(
                         "狀態 (點擊修改)",
                         help="選擇單字的學習狀態",
@@ -242,30 +239,24 @@ with tabs[3]:
                         required=True
                     )
                 },
-                # 設定除了「狀態」以外，其他欄位禁止修改以免誤觸
                 disabled=["生字", "原型", "中文", "英文", "日文", "西文", "例句"],
                 use_container_width=True,
                 hide_index=True
             )
             
-            # 建立一個儲存按鈕來批次更新狀態
             if st.button("💾 儲存所有狀態變更", type="primary"):
                 with st.spinner("更新資料庫中..."):
-                    # 比對原始 df 和 edited_df，找出被修改的狀態
                     for index, row in edited_df.iterrows():
                         orig_status = df.loc[index, "狀態"]
                         new_status = row["狀態"]
                         
                         if orig_status != new_status:
-                            # 將 Emoji 轉換回資料庫看得懂的英文
                             status_map = {"🧠 學習中": "learning", "✅ 掌握": "mastered", "⏸️ 暫停": "paused"}
                             db_status = status_map.get(new_status, "learning")
-                            
-                            # 更新至 Supabase
                             supabase.table("vocabulary").update({"status": db_status}).eq("id", row["db_id"]).execute()
                             
                     st.success("狀態已成功更新！")
-                    st.rerun() # 重新整理畫面顯示最新結果
+                    st.rerun() 
         else:
             st.warning("請至少保留一個欄位以顯示表格。")
     else:
