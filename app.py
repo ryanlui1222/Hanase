@@ -32,6 +32,7 @@ def hanase_ai_process(word):
     1. "lang": 識別語言類別 (EN, JA, ES)。
     2. "prototype": 提供該字的原型。
     3. "translations": 提供四語精確翻譯，格式為 {{"zh": "中文", "en": "英文", "ja": "日文", "es": "西文"}}。
+       ⚠️ 關鍵要求：日文翻譯若包含漢字，請務必在漢字後方的括號內標註「平假名」讀音（振假名），例如：膨大(ぼうだい)する。絕對不要使用羅馬拼音。
     4. "cloze_sentence": 根據使用者的學術背景，造一個具深度的例句。並將該單字或其變體以 "____" 替代。
     5. "sentence_zh": 該例句的中文翻譯。
     """
@@ -137,15 +138,15 @@ with tabs[2]:
     else:
         st.info("太棒了！目前的單字都已經複習完畢。去閱讀更多文章吧！")
 
-# --- 分頁 4：總覽 (進化版：自定義顯示欄位) ---
+# --- 分頁 4：總覽 (進化版：固定欄位開關) ---
 with tabs[3]:
     st.subheader("📚 我的多語字庫")
     
-    # 1. 從資料庫抓取資料
     all_words = supabase.table("vocabulary").select("*").in_("status", ["learning", "mastered"]).execute().data
     
     if all_words:
-        # 2. 整理完整資料 (包含例句)
+        import pandas as pd
+        
         data_list = []
         for w in all_words:
             data_list.append({
@@ -155,34 +156,33 @@ with tabs[3]:
                 "英文": w.get('trans_en', ''),
                 "日文": w.get('trans_ja', ''),
                 "西文": w.get('trans_es', ''),
-                "例句": w.get('example_sentence', '')  # 確保例句被加入
+                "例句": w.get('example_sentence', '') 
             })
         
-        # 3. 轉換為 Pandas DataFrame (Streamlit 處理表格的最佳方式)
-        import pandas as pd
         df = pd.DataFrame(data_list)
+        
+        st.write("💡 **溫習小撇步：** 點擊下方核取方塊來隱藏/顯示特定欄位。")
+        
+        # 定義你希望的「固定欄位順序」
+        fixed_columns = ["生字", "原型", "中文", "英文", "日文", "西文", "例句"]
+        
+        # 建立與欄位數量相同的橫向排版
+        cols = st.columns(len(fixed_columns))
+        selected_cols = []
+        
+        # 在每個橫向區塊中放入 Checkbox
+        for i, col_name in enumerate(fixed_columns):
+            with cols[i]:
+                # 預設全部打勾，使用者可以手動取消勾選來隱藏
+                if st.checkbox(col_name, value=True):
+                    selected_cols.append(col_name)
 
-        # 4. 實作「顯示/隱藏」功能 (用於溫習)
-        st.write("💡 **溫習小撇步：** 你可以只勾選「中文」與「例句」，嘗試默想「生字」後再勾選顯示。")
-        
-        # 建立欄位清單
-        all_columns = df.columns.tolist()
-        
-        # 預設顯示的欄位 (移除了「狀態」)
-        default_cols = ["生字", "中文", "例句"]
-        
-        # 讓使用者勾選想看的欄位
-        selected_cols = st.multiselect(
-            "選擇要顯示的欄位：",
-            options=all_columns,
-            default=default_cols
-        )
-
-        # 5. 根據勾選結果顯示表格
+        # 確保有選擇欄位才顯示表格
         if selected_cols:
+            # df[selected_cols] 會嚴格按照 selected_cols 裡面的順序（即 fixed_columns 的順序）來渲染
             st.dataframe(df[selected_cols], use_container_width=True)
         else:
-            st.warning("請至少選擇一個欄位來顯示資料。")
+            st.warning("請至少保留一個欄位以顯示表格。")
             
     else:
         st.write("目前字庫空空如也，快去收集單字吧！")
