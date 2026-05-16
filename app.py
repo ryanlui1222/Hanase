@@ -137,23 +137,52 @@ with tabs[2]:
     else:
         st.info("太棒了！目前的單字都已經複習完畢。去閱讀更多文章吧！")
 
-# --- 分頁 4：總覽 ---
+# --- 分頁 4：總覽 (進化版：自定義顯示欄位) ---
 with tabs[3]:
-    st.subheader("我的多語字庫")
+    st.subheader("📚 我的多語字庫")
+    
+    # 1. 從資料庫抓取資料
     all_words = supabase.table("vocabulary").select("*").in_("status", ["learning", "mastered"]).execute().data
     
     if all_words:
-        formatted_data = []
+        # 2. 整理完整資料 (包含例句)
+        data_list = []
         for w in all_words:
-            formatted_data.append({
-                "狀態": "✅ 掌握" if w['status'] == "mastered" else "🧠 學習中",
-                "生字": w['original_word'],
-                "原型": w['prototype'],
-                "中文": w['trans_zh'],
-                "英文": w['trans_en'],
-                "日文": w['trans_ja'],
-                "西文": w['trans_es']
+            data_list.append({
+                "生字": w.get('original_word', ''),
+                "原型": w.get('prototype', ''),
+                "中文": w.get('trans_zh', ''),
+                "英文": w.get('trans_en', ''),
+                "日文": w.get('trans_ja', ''),
+                "西文": w.get('trans_es', ''),
+                "例句": w.get('example_sentence', '')  # 確保例句被加入
             })
-        st.dataframe(formatted_data, use_container_width=True)
+        
+        # 3. 轉換為 Pandas DataFrame (Streamlit 處理表格的最佳方式)
+        import pandas as pd
+        df = pd.DataFrame(data_list)
+
+        # 4. 實作「顯示/隱藏」功能 (用於溫習)
+        st.write("💡 **溫習小撇步：** 你可以只勾選「中文」與「例句」，嘗試默想「生字」後再勾選顯示。")
+        
+        # 建立欄位清單
+        all_columns = df.columns.tolist()
+        
+        # 預設顯示的欄位 (移除了「狀態」)
+        default_cols = ["生字", "中文", "例句"]
+        
+        # 讓使用者勾選想看的欄位
+        selected_cols = st.multiselect(
+            "選擇要顯示的欄位：",
+            options=all_columns,
+            default=default_cols
+        )
+
+        # 5. 根據勾選結果顯示表格
+        if selected_cols:
+            st.dataframe(df[selected_cols], use_container_width=True)
+        else:
+            st.warning("請至少選擇一個欄位來顯示資料。")
+            
     else:
         st.write("目前字庫空空如也，快去收集單字吧！")
