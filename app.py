@@ -93,8 +93,8 @@ with tabs[1]:
                     
                     if result:
                         try:
-                            # 嘗試更新資料庫
-                            supabase.table("vocabulary").update({
+                            # 執行更新並捕捉回傳結果
+                            update_response = supabase.table("vocabulary").update({
                                 "prototype": result.get('prototype', ''),
                                 "trans_zh": result['translations'].get('zh', ''),
                                 "trans_en": result['translations'].get('en', ''),
@@ -103,10 +103,16 @@ with tabs[1]:
                                 "example_sentence": result.get('cloze_sentence', ''),
                                 "status": "learning"
                             }).eq("id", item['id']).execute()
-                            status.update(label=f"✅ {item['original_word']} 解析完成！", state="complete")
+                            
+                            # 關鍵檢查：是否有真的更新到資料？
+                            if len(update_response.data) == 0:
+                                status.update(label=f"⚠️ {item['original_word']} 被資料庫拒絕更新 (可能是 RLS 權限問題)", state="error")
+                            else:
+                                status.update(label=f"✅ {item['original_word']} 解析與存檔完成！", state="complete")
+                                
                         except Exception as db_err:
-                            status.update(label=f"❌ 資料庫更新失敗", state="error")
-                            st.error(f"資料庫寫入錯誤: {db_err}")
+                            status.update(label=f"❌ 資料庫寫入發生異常", state="error")
+                            st.error(f"詳細錯誤: {db_err}")
             
                 # 更新進度條
                 progress_bar.progress((idx + 1) / len(pending_items))
