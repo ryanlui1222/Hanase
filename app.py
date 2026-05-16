@@ -40,7 +40,7 @@ def hanase_ai_process(word):
     
     try:
         response = client.models.generate_content(
-            model='gemini-3.1-flash-lite',
+            model='gemini-3.1-flash-lite', # 🚀 已切換為高配額、高反應速度的 Lite 模型
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json"
@@ -48,7 +48,7 @@ def hanase_ai_process(word):
         )
         return json.loads(response.text)
     except Exception as e:
-        # 如果發生錯誤 (如 429)，這裡會捕捉並回傳 None，觸發後續的斷路器
+        # 如果發生錯誤 (如 429 速限保護)，這裡會捕捉並回傳 None，觸發後續的斷路器
         return None
 
 # ==========================================
@@ -139,15 +139,15 @@ with tabs[1]:
                     else:
                         # 【斷路器防護】如果 AI 回傳 None (例如觸發 429 速限)
                         status.update(label=f"❌ API 暫時阻擋了對 '{word}' 的解析", state="error")
-                        st.error("⚠️ 已觸發 Gemini 免費版 API 的每分鐘速限保護。全自動處理已緊急暫停！")
-                        st.info("💡 解決方案：請關閉自動模式，等待約 1 分鐘讓配額冷卻後，再重新啟動批次處理。")
+                        st.error("⚠️ 已觸發 Gemini API 的速限保護。全自動處理已緊急暫停！")
+                        st.info("💡 解決方案：請關閉自動模式，稍待片刻後再重新啟動批次處理。")
                         
                         st.session_state.auto_process = False
                         break # 中斷目前的 for 迴圈，不再送出這批次剩下的字
                             
-                # 更新進度條並強制休眠，保護 API 配額
+                # 🏎️ 極速調校：配合 15 RPM 的限制，設定為 4 秒休眠，達成最快處理速度
                 progress_bar.progress((idx + 1) / len(batch_items))
-                time.sleep(5) 
+                time.sleep(4) 
                 
             # 判斷是否要接力刷新
             if st.session_state.auto_process:
@@ -195,7 +195,7 @@ with tabs[1]:
 
 # --- 分頁 3：複習 ---
 with tabs[2]:
-    st.subheader("主動回憶挑戰")
+    st.subheader("主提回憶挑戰")
     review_data = supabase.table("vocabulary").select("*").eq("status", "learning").limit(1).execute().data
     
     if review_data:
