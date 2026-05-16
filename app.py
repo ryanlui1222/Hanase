@@ -25,7 +25,7 @@ genai.configure(api_key=GEMINI_KEY)
 def hanase_ai_process(word):
     # 這裡強制指定 AI 只能輸出 application/json 格式
     model = genai.GenerativeModel(
-        'gemini-1.5-flash',
+        'gemini-1.5-flash-latest', # 加上 -latest
         generation_config={"response_mime_type": "application/json"}
     )
     
