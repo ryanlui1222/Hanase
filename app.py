@@ -97,7 +97,6 @@ with tabs[1]:
                     result = hanase_ai_process(item['original_word'])
                     
                     if result:
-                    if result:
                         try:
                             # 【防禦 2：語意重複檢查】
                             # 使用 AI 翻譯出來的「中文意義」去比對庫中是否已有相同概念的單字
@@ -136,9 +135,10 @@ with tabs[1]:
             if st.button("🔄 重新載入畫面以更新名單"):
                 st.rerun()
 
-# --- 分頁 3：複習 ---
+# --- 分頁 3：複習 (加入暫停按鈕) ---
 with tabs[2]:
     st.subheader("主動回憶挑戰")
+    # 確保系統只會抓取 learning 狀態的字，排除了 paused
     review_data = supabase.table("vocabulary").select("*").eq("status", "learning").limit(1).execute().data
     
     if review_data:
@@ -147,29 +147,48 @@ with tabs[2]:
         st.write(f"**情境挑戰：** {word_data['example_sentence']}")
         
         ans = st.text_input("請填入單詞 (原型或變化型皆可)：", key="review_input")
-        if st.button("檢查答案"):
-            if ans.lower().strip() in [word_data['original_word'].lower(), word_data['prototype'].lower()]:
-                st.balloons()
-                st.success("正確！這就是 Hanase 的精神。")
-                supabase.table("vocabulary").update({"status": "mastered"}).eq("id", word_data['id']).execute()
+        
+        # 使用並排按鈕，讓操作更直覺
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("檢查答案", type="primary"):
+                if ans.lower().strip() in [word_data['original_word'].lower(), word_data['prototype'].lower()]:
+                    st.balloons()
+                    st.success("正確！這就是 Hanase 的精神。")
+                    supabase.table("vocabulary").update({"status": "mastered"}).eq("id", word_data['id']).execute()
+                    st.rerun()
+                else:
+                    st.error(f"再試一次！提示：原型是 {word_data['prototype']} / 原始記錄是 {word_data['original_word']}")
+        with col2:
+            # 新增的暫停按鈕
+            if st.button("⏸️ 這字我太熟了，暫停複習"):
+                supabase.table("vocabulary").update({"status": "paused"}).eq("id", word_data['id']).execute()
+                st.toast("已將單字移入暫停區！")
                 st.rerun()
-            else:
-                st.error(f"再試一次！提示：原型是 {word_data['prototype']} / 原始記錄是 {word_data['original_word']}")
     else:
         st.info("太棒了！目前的單字都已經複習完畢。去閱讀更多文章吧！")
 
-# --- 分頁 4：總覽 (進化版：固定欄位開關) ---
+# --- 分頁 4：總覽 (支援顯示暫停狀態) ---
 with tabs[3]:
     st.subheader("📚 我的多語字庫")
     
-    all_words = supabase.table("vocabulary").select("*").in_("status", ["learning", "mastered"]).execute().data
+    # 抓取條件加入 'paused'
+    all_words = supabase.table("vocabulary").select("*").in_("status", ["learning", "mastered", "paused"]).execute().data
     
     if all_words:
         import pandas as pd
-        
         data_list = []
         for w in all_words:
+            # 狀態視覺化判斷
+            if w['status'] == "mastered":
+                status_icon = "✅ 掌握"
+            elif w['status'] == "paused":
+                status_icon = "⏸️ 暫停"
+            else:
+                status_icon = "🧠 學習中"
+                
             data_list.append({
+                "狀態": status_icon,
                 "生字": w.get('original_word', ''),
                 "原型": w.get('prototype', ''),
                 "中文": w.get('trans_zh', ''),
@@ -180,29 +199,20 @@ with tabs[3]:
             })
         
         df = pd.DataFrame(data_list)
-        
         st.write("💡 **溫習小撇步：** 點擊下方核取方塊來隱藏/顯示特定欄位。")
         
-        # 定義你希望的「固定欄位順序」
-        fixed_columns = ["生字", "原型", "中文", "英文", "日文", "西文", "例句"]
-        
-        # 建立與欄位數量相同的橫向排版
+        fixed_columns = ["狀態", "生字", "原型", "中文", "英文", "日文", "西文", "例句"]
         cols = st.columns(len(fixed_columns))
         selected_cols = []
         
-        # 在每個橫向區塊中放入 Checkbox
         for i, col_name in enumerate(fixed_columns):
             with cols[i]:
-                # 預設全部打勾，使用者可以手動取消勾選來隱藏
                 if st.checkbox(col_name, value=True):
                     selected_cols.append(col_name)
 
-        # 確保有選擇欄位才顯示表格
         if selected_cols:
-            # df[selected_cols] 會嚴格按照 selected_cols 裡面的順序（即 fixed_columns 的順序）來渲染
             st.dataframe(df[selected_cols], use_container_width=True)
         else:
             st.warning("請至少保留一個欄位以顯示表格。")
-            
     else:
         st.write("目前字庫空空如也，快去收集單字吧！")
