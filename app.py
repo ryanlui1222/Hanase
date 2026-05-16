@@ -77,86 +77,114 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("AI 語言自動化解析")
     
-    pending_items = supabase.table("vocabulary").select("*").eq("status", "pending").execute().data
-    
-    if not pending_items:
-        st.info("🎉 目前沒有待處理的單詞。")
-    else:
-        st.write(f"共有 **{len(pending_items)}** 個單詞等待處理：")
+    # 初始化一個「自動處理中」的狀態記憶
+    if "auto_process" not in st.session_state:
+        st.session_state.auto_process = False
+
+    # ＝＝＝＝＝ 狀態 A：自動處理進行中 ＝＝＝＝＝
+    if st.session_state.auto_process:
+        st.warning("⏳ 系統正在全自動批次處理中，請放置此畫面不要關閉網頁...")
+        if st.button("🛑 暫停處理 (緊急停止)"):
+            st.session_state.auto_process = False
+            st.rerun()
+
+        # 每次只抓 3 個字來處理，避免觸發 30 秒伺服器超時
+        batch_items = supabase.table("vocabulary").select("*").eq("status", "pending").limit(3).execute().data
         
-        df_pending = pd.DataFrame([
-            {"db_id": item['id'], "🗑️ 勾選刪除": False, "生字": item['original_word'], "加入時間": item['created_at'][:10]} 
-            for item in pending_items
-        ])
-        
-        edited_pending = st.data_editor(
-            df_pending,
-            column_config={"db_id": None},
-            disabled=["生字", "加入時間"],
-            use_container_width=True,
-            hide_index=True
-        )
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("🚀 啟動 Hanase AI 批次處理", type="primary"):
-                items_to_process = edited_pending[edited_pending["🗑️ 勾選刪除"] == False]
-                progress_bar = st.progress(0)
+        if not batch_items:
+            # 如果已經沒有待處理的字，關閉自動處理模式
+            st.session_state.auto_process = False
+            st.success("✨ 太棒了！所有單字皆已處理完畢！")
+            time.sleep(2) # 讓成功訊息停留兩秒
+            st.rerun()
+        else:
+            progress_bar = st.progress(0)
+            for idx, item in enumerate(batch_items):
+                word = item['original_word']
+                word_id = item['id']
                 
-                for idx, row in items_to_process.iterrows():
-                    word = row['生字']
-                    word_id = row['db_id']
-                    
-                    with st.status(f"正在解析: {word}...", expanded=False) as status:
-                        result = hanase_ai_process(word)
-                        if result:
-                            try:
-                                zh_meaning = result['translations'].get('zh', '')
-                                dupes = supabase.table("vocabulary").select("original_word").eq("trans_zh", zh_meaning).neq("id", word_id).execute().data
+                with st.status(f"正在解析: {word}...", expanded=False) as status:
+                    result = hanase_ai_process(word)
+                    if result:
+                        try:
+                            # 檢查中文語意是否重複
+                            zh_meaning = result['translations'].get('zh', '')
+                            dupes = supabase.table("vocabulary").select("original_word").eq("trans_zh", zh_meaning).neq("id", word_id).execute().data
+                            
+                            if dupes:
+                                supabase.table("vocabulary").delete().eq("id", word_id).execute()
+                                status.update(label=f"⚠️ '{word}' 與庫中的 '{dupes[0]['original_word']}' 意義重複，已自動剔除。", state="error")
+                            else:
+                                # 縫合例句與翻譯
+                                cloze = result.get('cloze_sentence', '')
+                                zh_trans = result.get('sentence_zh', '')
+                                combined_sentence = f"{cloze}\n\n{zh_trans}"
+
+                                update_response = supabase.table("vocabulary").update({
+                                    "prototype": result.get('prototype', ''),
+                                    "trans_zh": zh_meaning,
+                                    "trans_en": result['translations'].get('en', ''),
+                                    "trans_ja": result['translations'].get('ja', ''),
+                                    "trans_es": result['translations'].get('es', ''),
+                                    "example_sentence": combined_sentence,
+                                    "status": "learning"
+                                }).eq("id", word_id).execute()
                                 
-                                if dupes:
-                                    supabase.table("vocabulary").delete().eq("id", word_id).execute()
-                                    status.update(label=f"⚠️ '{word}' 與庫中的 '{dupes[0]['original_word']}' 意義重複，已自動剔除。", state="error")
+                                if len(update_response.data) == 0:
+                                    status.update(label=f"⚠️ {word} 被拒絕更新", state="error")
                                 else:
-                                    cloze = result.get('cloze_sentence', '')
-                                    zh_trans = result.get('sentence_zh', '')
-                                    combined_sentence = f"{cloze}\n\n{zh_trans}"
+                                    status.update(label=f"✅ {word} 解析完成！", state="complete")
+                        except Exception as db_err:
+                            status.update(label=f"❌ 資料庫寫入異常", state="error")
+                            st.error(f"詳細錯誤: {db_err}")
+                            
+                # 更新進度條並強制休眠，避免觸發 API 速限
+                progress_bar.progress((idx + 1) / len(batch_items))
+                time.sleep(4) 
+                
+            # 這批 3 個字處理完了！利用 st.rerun() 自動重整網頁，接力處理下一批！
+            st.rerun()
 
-                                    update_response = supabase.table("vocabulary").update({
-                                        "prototype": result.get('prototype', ''),
-                                        "trans_zh": zh_meaning,
-                                        "trans_en": result['translations'].get('en', ''),
-                                        "trans_ja": result['translations'].get('ja', ''),
-                                        "trans_es": result['translations'].get('es', ''),
-                                        "example_sentence": combined_sentence,
-                                        "status": "learning"
-                                    }).eq("id", word_id).execute()
-                                    
-                                    if len(update_response.data) == 0:
-                                        status.update(label=f"⚠️ {word} 被拒絕更新", state="error")
-                                    else:
-                                        status.update(label=f"✅ {word} 解析完成！", state="complete")
-                            except Exception as db_err:
-                                status.update(label=f"❌ 資料庫寫入異常", state="error")
-                                st.error(f"詳細錯誤: {db_err}")
-                                
-                    progress_bar.progress((idx + 1) / len(items_to_process))
-                    time.sleep(4) 
-                    
-                st.success("批次處理執行完畢！")
-                st.rerun()
-
-        with col2:
-            if st.button("🗑️ 刪除勾選的單字"):
-                items_to_delete = edited_pending[edited_pending["🗑️ 勾選刪除"] == True]
-                for idx, row in items_to_delete.iterrows():
-                    supabase.table("vocabulary").delete().eq("id", row['db_id']).execute()
-                if len(items_to_delete) > 0:
-                    st.success(f"已成功刪除 {len(items_to_delete)} 個單字！")
+    # ＝＝＝＝＝ 狀態 B：閒置中 (顯示表格與啟動按鈕) ＝＝＝＝＝
+    else:
+        pending_items = supabase.table("vocabulary").select("*").eq("status", "pending").execute().data
+        
+        if not pending_items:
+            st.info("🎉 目前沒有待處理的單詞。")
+        else:
+            st.write(f"共有 **{len(pending_items)}** 個單詞等待處理：")
+            
+            df_pending = pd.DataFrame([
+                {"db_id": item['id'], "🗑️ 勾選刪除": False, "生字": item['original_word'], "加入時間": item['created_at'][:10]} 
+                for item in pending_items
+            ])
+            
+            edited_pending = st.data_editor(
+                df_pending,
+                column_config={"db_id": None},
+                disabled=["生字", "加入時間"],
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # 啟動按鈕：改變系統狀態為「自動處理中」，然後重整畫面
+                if st.button("🚀 一鍵自動處理全部生字", type="primary"):
+                    st.session_state.auto_process = True
                     st.rerun()
-                else:
-                    st.warning("請先在表格中勾選要刪除的單字。")
+
+            with col2:
+                if st.button("🗑️ 刪除勾選的單字"):
+                    items_to_delete = edited_pending[edited_pending["🗑️ 勾選刪除"] == True]
+                    for idx, row in items_to_delete.iterrows():
+                        supabase.table("vocabulary").delete().eq("id", row['db_id']).execute()
+                    if len(items_to_delete) > 0:
+                        st.success(f"已成功刪除 {len(items_to_delete)} 個單字！")
+                        st.rerun()
+                    else:
+                        st.warning("請先在表格中勾選要刪除的單字。")
 
 # --- 分頁 3：複習 ---
 with tabs[2]:
