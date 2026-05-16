@@ -1,5 +1,6 @@
 import streamlit as st
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from supabase import create_client
 import json
 
@@ -17,18 +18,14 @@ except KeyError:
     st.stop()
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-genai.configure(api_key=GEMINI_KEY)
+
+# 【新版接駁方式】初始化 Gemini 客戶端
+client = genai.Client(api_key=GEMINI_KEY)
 
 # ==========================================
-# 2. Hanase AI 語言專家邏輯 (啟用嚴格 JSON 模式)
+# 2. Hanase AI 語言專家邏輯 (新版 SDK 寫法)
 # ==========================================
 def hanase_ai_process(word):
-    # 這裡強制指定 AI 只能輸出 application/json 格式
-    model = genai.GenerativeModel(
-        'gemini-1.5-flash-latest', # 加上 -latest
-        generation_config={"response_mime_type": "application/json"}
-    )
-    
     prompt = f"""
     你是 Hanase 應用的語言導師。使用者提供了生字 '{word}'。
     請執行以下任務並回傳 JSON 格式：
@@ -40,13 +37,17 @@ def hanase_ai_process(word):
     """
     
     try:
-        response = model.generate_content(prompt)
-        return json.loads(response.text) # JSON 模式下不需要 strip
+        # 【新版接駁方式】使用 client.models.generate_content 並指定 gemini-2.5-flash
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json"
+            )
+        )
+        return json.loads(response.text)
     except Exception as e:
-        # 如果解析失敗，把錯誤印在畫面上讓我們好抓蟲
         st.error(f"❌ 解析 '{word}' 時發生錯誤: {str(e)}")
-        if 'response' in locals():
-            st.warning(f"AI 原始回傳內容: {response.text}")
         return None
 
 # ==========================================
@@ -55,7 +56,6 @@ def hanase_ai_process(word):
 st.title("🗣️ Hanase")
 st.caption("從「記住」到「說出」——你的多語言輸出夥伴")
 
-# 新增為四個分頁
 tabs = st.tabs(["📥 錄入 (Capture)", "🔍 處理 (Process)", "🧠 複習 (Recall)", "📚 總覽 (Overview)"])
 
 # --- 分頁 1：錄入 ---
@@ -71,7 +71,6 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("AI 語言自動化解析")
     
-    # 抓取尚未處理的字
     pending_items = supabase.table("vocabulary").select("*").eq("status", "pending").execute().data
     
     if not pending_items:
@@ -79,7 +78,6 @@ with tabs[1]:
     else:
         st.write(f"共有 **{len(pending_items)}** 個單詞等待處理：")
         
-        # 顯示待處理清單
         st.dataframe(
             [{"生字": item['original_word'], "加入時間": item['created_at'][:10]} for item in pending_items],
             use_container_width=True
@@ -93,7 +91,6 @@ with tabs[1]:
                     
                     if result:
                         try:
-                            # 執行更新並捕捉回傳結果
                             update_response = supabase.table("vocabulary").update({
                                 "prototype": result.get('prototype', ''),
                                 "trans_zh": result['translations'].get('zh', ''),
@@ -104,21 +101,17 @@ with tabs[1]:
                                 "status": "learning"
                             }).eq("id", item['id']).execute()
                             
-                            # 關鍵檢查：是否有真的更新到資料？
                             if len(update_response.data) == 0:
-                                status.update(label=f"⚠️ {item['original_word']} 被資料庫拒絕更新 (可能是 RLS 權限問題)", state="error")
+                                status.update(label=f"⚠️ {item['original_word']} 被資料庫拒絕更新 (請確認 Supabase 的 UPDATE 權限)", state="error")
                             else:
                                 status.update(label=f"✅ {item['original_word']} 解析與存檔完成！", state="complete")
-                                
                         except Exception as db_err:
                             status.update(label=f"❌ 資料庫寫入發生異常", state="error")
                             st.error(f"詳細錯誤: {db_err}")
             
-                # 更新進度條
                 progress_bar.progress((idx + 1) / len(pending_items))
                 
-            st.success("批次處理執行完畢！請查看上方是否有錯誤訊息。")
-            # 移除 st.rerun()，改為提供一個手動刷新按鈕
+            st.success("批次處理執行完畢！")
             if st.button("🔄 重新載入畫面以更新名單"):
                 st.rerun()
 
@@ -138,19 +131,18 @@ with tabs[2]:
                 st.balloons()
                 st.success("正確！這就是 Hanase 的精神。")
                 supabase.table("vocabulary").update({"status": "mastered"}).eq("id", word_data['id']).execute()
+                st.rerun()
             else:
                 st.error(f"再試一次！提示：原型是 {word_data['prototype']} / 原始記錄是 {word_data['original_word']}")
     else:
         st.info("太棒了！目前的單字都已經複習完畢。去閱讀更多文章吧！")
 
-# --- 分頁 4：總覽 (全新功能) ---
+# --- 分頁 4：總覽 ---
 with tabs[3]:
     st.subheader("我的多語字庫")
-    # 抓取 learning 和 mastered 的單字
     all_words = supabase.table("vocabulary").select("*").in_("status", ["learning", "mastered"]).execute().data
     
     if all_words:
-        # 使用 Streamlit 原生表格呈現
         formatted_data = []
         for w in all_words:
             formatted_data.append({
