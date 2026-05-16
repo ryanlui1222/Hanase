@@ -6,13 +6,16 @@ import json
 # ==========================================
 # 1. 基礎配置
 # ==========================================
-st.set_page_config(page_title="Hanase - Speak Your World", page_icon="🗣️")
+try:
+    # 當部署到雲端或在本地有 secrets.toml 時，Streamlit 會自動讀取
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    GEMINI_KEY = st.secrets["GEMINI_KEY"]
+except KeyError:
+    st.error("找不到必要的金鑰設定！請檢查本地的 secrets.toml 或雲端的 Secrets 設定。")
+    st.stop()
 
-# 請將以下資訊替換為你自己的 Keys
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", "你的_SUPABASE_URL")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "你的_SUPABASE_KEY")
-GEMINI_KEY = st.secrets.get("GEMINI_KEY", "你的_GEMINI_KEY")
-
+# 初始化客戶端
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GEMINI_KEY)
 
