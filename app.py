@@ -59,14 +59,20 @@ st.caption("從「記住」到「說出」——你的多語言輸出夥伴")
 
 tabs = st.tabs(["📥 錄入 (Capture)", "🔍 處理 (Process)", "🧠 複習 (Recall)", "📚 總覽 (Overview)"])
 
-# --- 分頁 1：錄入 ---
+# --- 分頁 1：錄入 (加入防呆機制) ---
 with tabs[0]:
     st.subheader("手動新增單詞")
     input_word = st.text_input("在閱讀中遇到了什麼生詞？")
     if st.button("暫存至名單"):
         if input_word:
-            supabase.table("vocabulary").insert({"original_word": input_word, "status": "pending"}).execute()
-            st.success(f"'{input_word}' 已加入待處理名單。")
+            # 先去資料庫找找看有沒有一模一樣的字
+            existing = supabase.table("vocabulary").select("id").ilike("original_word", input_word).execute().data
+            
+            if existing:
+                st.warning(f"⚠️ 你的字庫裡已經有 '{input_word}' 囉，不需要重複加入！")
+            else:
+                supabase.table("vocabulary").insert({"original_word": input_word, "status": "pending"}).execute()
+                st.success(f"'{input_word}' 已加入待處理名單。")
 
 # --- 分頁 2：處理 (AI 接駁與預覽) ---
 with tabs[1]:
@@ -91,21 +97,35 @@ with tabs[1]:
                     result = hanase_ai_process(item['original_word'])
                     
                     if result:
+                    if result:
                         try:
-                            update_response = supabase.table("vocabulary").update({
-                                "prototype": result.get('prototype', ''),
-                                "trans_zh": result['translations'].get('zh', ''),
-                                "trans_en": result['translations'].get('en', ''),
-                                "trans_ja": result['translations'].get('ja', ''),
-                                "trans_es": result['translations'].get('es', ''),
-                                "example_sentence": result.get('cloze_sentence', ''),
-                                "status": "learning"
-                            }).eq("id", item['id']).execute()
+                            # 【防禦 2：語意重複檢查】
+                            # 使用 AI 翻譯出來的「中文意義」去比對庫中是否已有相同概念的單字
+                            zh_meaning = result['translations'].get('zh', '')
+                            # 尋找除了自己 (pending) 以外，是否有其他字擁有相同的中文翻譯
+                            dupes = supabase.table("vocabulary").select("original_word").eq("trans_zh", zh_meaning).neq("id", item['id']).execute().data
                             
-                            if len(update_response.data) == 0:
-                                status.update(label=f"⚠️ {item['original_word']} 被資料庫拒絕更新 (請確認 Supabase 的 UPDATE 權限)", state="error")
+                            if dupes:
+                                # 發現語意重複！直接刪除這個 pending 的待處理字
+                                supabase.table("vocabulary").delete().eq("id", item['id']).execute()
+                                status.update(label=f"⚠️ '{item['original_word']}' 與庫中已有的 '{dupes[0]['original_word']}' 意義相同，已自動剔除。", state="error")
                             else:
-                                status.update(label=f"✅ {item['original_word']} 解析與存檔完成！", state="complete")
+                                # 沒有重複，正常更新資料庫
+                                update_response = supabase.table("vocabulary").update({
+                                    "prototype": result.get('prototype', ''),
+                                    "trans_zh": zh_meaning,
+                                    "trans_en": result['translations'].get('en', ''),
+                                    "trans_ja": result['translations'].get('ja', ''),
+                                    "trans_es": result['translations'].get('es', ''),
+                                    "example_sentence": result.get('cloze_sentence', ''),
+                                    "status": "learning"
+                                }).eq("id", item['id']).execute()
+                                
+                                if len(update_response.data) == 0:
+                                    status.update(label=f"⚠️ {item['original_word']} 被資料庫拒絕更新", state="error")
+                                else:
+                                    status.update(label=f"✅ {item['original_word']} 解析與存檔完成！", state="complete")
+                                    
                         except Exception as db_err:
                             status.update(label=f"❌ 資料庫寫入發生異常", state="error")
                             st.error(f"詳細錯誤: {db_err}")
