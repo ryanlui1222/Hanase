@@ -48,7 +48,7 @@ def hanase_ai_process(word):
         )
         return json.loads(response.text)
     except Exception as e:
-        st.error(f"❌ 解析 '{word}' 時發生錯誤: {str(e)}")
+        # 如果發生錯誤 (如 429)，這裡會捕捉並回傳 None，觸發後續的斷路器
         return None
 
 # ==========================================
@@ -77,7 +77,7 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("AI 語言自動化解析")
     
-    # 初始化一個「自動處理中」的狀態記憶
+    # 狀態記憶：是否正在全自動處理中
     if "auto_process" not in st.session_state:
         st.session_state.auto_process = False
 
@@ -88,14 +88,13 @@ with tabs[1]:
             st.session_state.auto_process = False
             st.rerun()
 
-        # 每次只抓 3 個字來處理，避免觸發 30 秒伺服器超時
+        # 每次只抓 3 個字來處理，避免 Streamlit 30 秒超時
         batch_items = supabase.table("vocabulary").select("*").eq("status", "pending").limit(3).execute().data
         
         if not batch_items:
-            # 如果已經沒有待處理的字，關閉自動處理模式
             st.session_state.auto_process = False
             st.success("✨ 太棒了！所有單字皆已處理完畢！")
-            time.sleep(2) # 讓成功訊息停留兩秒
+            time.sleep(2)
             st.rerun()
         else:
             progress_bar = st.progress(0)
@@ -105,9 +104,10 @@ with tabs[1]:
                 
                 with st.status(f"正在解析: {word}...", expanded=False) as status:
                     result = hanase_ai_process(word)
+                    
                     if result:
                         try:
-                            # 檢查中文語意是否重複
+                            # 語意去重檢查
                             zh_meaning = result['translations'].get('zh', '')
                             dupes = supabase.table("vocabulary").select("original_word").eq("trans_zh", zh_meaning).neq("id", word_id).execute().data
                             
@@ -115,7 +115,6 @@ with tabs[1]:
                                 supabase.table("vocabulary").delete().eq("id", word_id).execute()
                                 status.update(label=f"⚠️ '{word}' 與庫中的 '{dupes[0]['original_word']}' 意義重複，已自動剔除。", state="error")
                             else:
-                                # 縫合例句與翻譯
                                 cloze = result.get('cloze_sentence', '')
                                 zh_trans = result.get('sentence_zh', '')
                                 combined_sentence = f"{cloze}\n\n{zh_trans}"
@@ -131,21 +130,30 @@ with tabs[1]:
                                 }).eq("id", word_id).execute()
                                 
                                 if len(update_response.data) == 0:
-                                    status.update(label=f"⚠️ {word} 被拒絕更新", state="error")
+                                    status.update(label=f"⚠️ {word} 被資料庫拒絕更新", state="error")
                                 else:
                                     status.update(label=f"✅ {word} 解析完成！", state="complete")
                         except Exception as db_err:
                             status.update(label=f"❌ 資料庫寫入異常", state="error")
                             st.error(f"詳細錯誤: {db_err}")
+                    else:
+                        # 【斷路器防護】如果 AI 回傳 None (例如觸發 429 速限)
+                        status.update(label=f"❌ API 暫時阻擋了對 '{word}' 的解析", state="error")
+                        st.error("⚠️ 已觸發 Gemini 免費版 API 的每分鐘速限保護。全自動處理已緊急暫停！")
+                        st.info("💡 解決方案：請關閉自動模式，等待約 1 分鐘讓配額冷卻後，再重新啟動批次處理。")
+                        
+                        st.session_state.auto_process = False
+                        break # 中斷目前的 for 迴圈，不再送出這批次剩下的字
                             
-                # 更新進度條並強制休眠，避免觸發 API 速限
+                # 更新進度條並強制休眠，保護 API 配額
                 progress_bar.progress((idx + 1) / len(batch_items))
-                time.sleep(4) 
+                time.sleep(5) 
                 
-            # 這批 3 個字處理完了！利用 st.rerun() 自動重整網頁，接力處理下一批！
-            st.rerun()
+            # 判斷是否要接力刷新
+            if st.session_state.auto_process:
+                st.rerun()
 
-    # ＝＝＝＝＝ 狀態 B：閒置中 (顯示表格與啟動按鈕) ＝＝＝＝＝
+    # ＝＝＝＝＝ 狀態 B：閒置中 (顯示表格) ＝＝＝＝＝
     else:
         pending_items = supabase.table("vocabulary").select("*").eq("status", "pending").execute().data
         
@@ -170,7 +178,6 @@ with tabs[1]:
             col1, col2 = st.columns(2)
             
             with col1:
-                # 啟動按鈕：改變系統狀態為「自動處理中」，然後重整畫面
                 if st.button("🚀 一鍵自動處理全部生字", type="primary"):
                     st.session_state.auto_process = True
                     st.rerun()
