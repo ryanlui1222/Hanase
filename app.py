@@ -23,7 +23,11 @@ genai.configure(api_key=GEMINI_KEY)
 # 2. Hanase AI 語言專家邏輯
 # ==========================================
 def hanase_ai_process(word):
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # 加上 generation_config 強制 AI 只輸出純 JSON
+    model = genai.GenerativeModel(
+        'gemini-1.5-flash',
+        generation_config={"response_mime_type": "application/json"}
+    )
     
     # 針對 Hanase 的專業定位優化 Prompt
     prompt = f"""
@@ -47,8 +51,10 @@ def hanase_ai_process(word):
     """
     try:
         response = model.generate_content(prompt)
-        return json.loads(response.text.strip('```json').strip())
-    except:
+        # 因為已經強制是 JSON，所以不需要再做任何 strip() 清理
+        return json.loads(response.text)
+    except Exception as e:
+        st.error(f"解析發生錯誤: {e}")
         return None
 
 # ==========================================
