@@ -1,3 +1,4 @@
 streamlit
 supabase
 google-genai
+gTTS
