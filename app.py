@@ -231,7 +231,12 @@ with tabs[3]:
     st.subheader("📚 我的多語字庫")
     
     # 【新增】發音語言全局設定
-    play_lang = st.radio("🔊 表格點擊發音語言：", ["日文", "英文", "西文"], horizontal=True)
+    play_lang = st.radio(
+        "🔊 生字發音口音：", 
+        ["日文", "英文", "西文"], 
+        horizontal=True,
+        help="因為生字欄包含多國語言，請手動選擇要用哪國的聲音來朗讀該生字"
+    )    
     
     filter_option = st.radio(
         "快速篩選：", 
@@ -330,8 +335,12 @@ with tabs[3]:
 
             # 【執行發音】
             if newly_checked_idx is not None:
-                text_to_read = edited_df.loc[newly_checked_idx, play_lang]
+                # 🌟 關鍵修正 1：永遠從「背後完整的 df」抓取「生字」欄位！
+                # 這樣一來，不管使用者在畫面上隱藏了什麼欄位，都絕對不會發生 KeyError
+                text_to_read = df.loc[newly_checked_idx, "生字"]
+                
                 if text_to_read and str(text_to_read).strip() != "":
+                    # 🌟 關鍵修正 2：根據你上方的選項，決定要用哪國口音來唸這個「生字」
                     lang_map = {"日文": "ja", "英文": "en", "西文": "es"}
                     try:
                         tts = gTTS(text=str(text_to_read), lang=lang_map[play_lang])
@@ -343,8 +352,7 @@ with tabs[3]:
                     except Exception as e:
                         st.toast(f"發音產生失敗：{e}")
                 else:
-                    st.toast("這個單字沒有對應語言的內容喔！")
-
+                    st.toast("這個生字欄位是空的喔！")
             
             # --- 儲存狀態變更邏輯 ---
             if st.button("💾 儲存所有狀態變更", type="primary"):
