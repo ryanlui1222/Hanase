@@ -230,6 +230,9 @@ with tabs[2]:
 with tabs[3]:
     st.subheader("📚 我的多語字庫")
     
+    # 【新增】發音語言全局設定
+    play_lang = st.radio("🔊 表格點擊發音語言：", ["日文", "英文", "西文"], horizontal=True)
+    
     filter_option = st.radio(
         "快速篩選：", 
         ["全部單字", "🧠 僅顯示學習中", "⏸️ 僅顯示暫停", "✅ 僅顯示已掌握"], 
@@ -270,7 +273,12 @@ with tabs[3]:
             })
         
         df = pd.DataFrame(data_list)
-        st.write("💡 **操作提示：** 點擊「狀態」欄位可直接切換單字狀態或徹底刪除。更改後請點擊下方按鈕儲存。")
+        
+        # 【新增】準備用來偵測最新點擊的 Session State 記憶
+        if "last_play_state" not in st.session_state:
+            st.session_state.last_play_state = {}
+            
+        st.write("💡 **操作提示：** 勾選「🔊 播放」即可發音。想聽下一個字**不用取消打勾**，直接勾選新的即可！更改狀態後請點擊最下方按鈕儲存。")
         
         fixed_columns = ["狀態", "生字", "原型", "中文", "英文", "日文", "西文", "例句"]
         cols = st.columns(len(fixed_columns))
@@ -284,10 +292,15 @@ with tabs[3]:
         if selected_cols:
             cols_to_show = ["db_id"] + selected_cols if "狀態" in selected_cols else ["db_id", "狀態"] + selected_cols
             
+            # 【新增】在要顯示的 DataFrame 中動態插入「🔊 播放」欄位
+            display_df = df[cols_to_show].copy()
+            display_df.insert(1, "🔊 播放", False) 
+            
             edited_df = st.data_editor(
-                df[cols_to_show],
+                display_df,
                 column_config={
                     "db_id": None, 
+                    "🔊 播放": st.column_config.CheckboxColumn("🔊 播放", help="勾選即可聆聽"),
                     "狀態": st.column_config.SelectboxColumn(
                         "狀態 (點擊修改)",
                         help="選擇單字的學習狀態或將其徹底刪除",
@@ -295,11 +308,45 @@ with tabs[3]:
                         required=True
                     )
                 },
+                # 注意 disabled 不要鎖定 "🔊 播放" 欄位
                 disabled=["生字", "原型", "中文", "英文", "日文", "西文", "例句"],
                 use_container_width=True,
                 hide_index=True
             )
             
+            # 【核心邏輯】智慧偵測「最新被勾選」的那一列
+            current_play_state = edited_df["🔊 播放"].to_dict()
+            newly_checked_idx = None
+
+            for idx, is_checked in current_play_state.items():
+                # 如果現在是 True，且之前記憶中是 False (或沒記錄)
+                was_checked = st.session_state.last_play_state.get(idx, False)
+                if is_checked and not was_checked:
+                    newly_checked_idx = idx
+                    break
+
+            # 更新記憶狀態供下一次比對
+            st.session_state.last_play_state = current_play_state
+
+            # 【執行發音】
+            if newly_checked_idx is not None:
+                text_to_read = edited_df.loc[newly_checked_idx, play_lang]
+                if text_to_read and str(text_to_read).strip() != "":
+                    lang_map = {"日文": "ja", "英文": "en", "西文": "es"}
+                    try:
+                        tts = gTTS(text=str(text_to_read), lang=lang_map[play_lang])
+                        fp = io.BytesIO()
+                        tts.write_to_fp(fp)
+                        fp.seek(0)
+                        # 隱藏式播放器，自動播放
+                        st.audio(fp.read(), format="audio/mp3", autoplay=True)
+                    except Exception as e:
+                        st.toast(f"發音產生失敗：{e}")
+                else:
+                    st.toast("這個單字沒有對應語言的內容喔！")
+
+            
+            # --- 儲存狀態變更邏輯 ---
             if st.button("💾 儲存所有狀態變更", type="primary"):
                 with st.spinner("更新資料庫中..."):
                     for index, row in edited_df.iterrows():
