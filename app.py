@@ -155,7 +155,7 @@ with tabs[1]:
             if st.session_state.auto_process:
                 st.rerun()
 
-    # ＝＝＝＝＝ 狀態 B：閒置中 (顯示表格) ＝＝＝＝＝
+# ＝＝＝＝＝ 狀態 B：閒置中 (顯示表格) ＝＝＝＝＝
     else:
         pending_items = supabase.table("vocabulary").select("*").eq("status", "pending").execute().data
         
@@ -169,23 +169,37 @@ with tabs[1]:
                 for item in pending_items
             ])
             
+            # 【修改 1】將 "生字" 從 disabled 中移除，讓它可以被編輯
             edited_pending = st.data_editor(
                 df_pending,
                 column_config={"db_id": None},
-                disabled=["生字", "加入時間"],
+                disabled=["加入時間"], 
                 use_container_width=True,
                 hide_index=True
             )
             
-            col1, col2 = st.columns(2)
+            # 將按鈕排成三列
+            col1, col2, col3 = st.columns(3)
             
             with col1:
-                if st.button("🚀 一鍵自動處理全部生字", type="primary"):
+                if st.button("🚀 自動處理全部生字", type="primary"):
                     st.session_state.auto_process = True
                     st.rerun()
 
             with col2:
-                if st.button("🗑️ 刪除勾選的單字"):
+                # 【新增】儲存修改按鈕
+                if st.button("💾 儲存生字修改"):
+                    with st.spinner("儲存中..."):
+                        for idx, row in edited_pending.iterrows():
+                            orig_word = df_pending.loc[idx, "生字"]
+                            new_word = row["生字"]
+                            if orig_word != new_word:
+                                supabase.table("vocabulary").update({"original_word": new_word}).eq("id", row["db_id"]).execute()
+                        st.success("修改已儲存！")
+                        st.rerun()
+
+            with col3:
+                if st.button("🗑️ 刪除勾選單字"):
                     items_to_delete = edited_pending[edited_pending["🗑️ 勾選刪除"] == True]
                     for idx, row in items_to_delete.iterrows():
                         supabase.table("vocabulary").delete().eq("id", row['db_id']).execute()
@@ -230,19 +244,22 @@ with tabs[2]:
 with tabs[3]:
     st.subheader("📚 我的多語字庫")
     
-    # 【新增】發音語言全局設定
+    # 【修改 3】發音欄位與口音直接掛鉤
     play_lang = st.radio(
-        "🔊 生字發音口音：", 
+        "🔊 點擊播放的欄位與口音：", 
         ["日文", "英文", "西文"], 
         horizontal=True,
-        help="因為生字欄包含多國語言，請手動選擇要用哪國的聲音來朗讀該生字"
-    )    
+        help="選擇後，點擊下方表格的播放鍵，將會朗讀該單字對應語言的欄位內容。"
+    )
     
     filter_option = st.radio(
         "快速篩選：", 
         ["全部單字", "🧠 僅顯示學習中", "⏸️ 僅顯示暫停", "✅ 僅顯示已掌握"], 
         horizontal=True
     )
+    
+    # 【新增 2】編輯模式防誤觸開關
+    edit_mode = st.toggle("✏️ 啟用編輯模式 (解鎖狀態與文字修改)")
     
     if filter_option == "🧠 僅顯示學習中":
         status_filter = ["learning"]
@@ -279,11 +296,13 @@ with tabs[3]:
         
         df = pd.DataFrame(data_list)
         
-        # 【新增】準備用來偵測最新點擊的 Session State 記憶
         if "last_play_state" not in st.session_state:
             st.session_state.last_play_state = {}
             
-        st.write("💡 **操作提示：** 勾選「🔊 播放」即可發音。想聽下一個字**不用取消打勾**，直接勾選新的即可！更改狀態後請點擊最下方按鈕儲存。")
+        if edit_mode:
+            st.info("💡 **編輯模式已開啟：** 您現在可以修改表格內的任何文字或狀態，修改完畢請點擊下方按鈕儲存。")
+        else:
+            st.write("💡 **閱讀模式：** 勾選「🔊 播放」即可發音，想聽下一個字不需取消打勾。若需修改資料請開啟上方編輯模式。")
         
         fixed_columns = ["狀態", "生字", "原型", "中文", "英文", "日文", "西文", "例句"]
         cols = st.columns(len(fixed_columns))
@@ -297,80 +316,96 @@ with tabs[3]:
         if selected_cols:
             cols_to_show = ["db_id"] + selected_cols if "狀態" in selected_cols else ["db_id", "狀態"] + selected_cols
             
-            # 【新增】在要顯示的 DataFrame 中動態插入「🔊 播放」欄位
             display_df = df[cols_to_show].copy()
             display_df.insert(1, "🔊 播放", False) 
             
+            # 根據編輯模式決定鎖定哪些欄位 (確保播放鍵永遠可點)
+            if edit_mode:
+                disabled_cols = [] # 全部解鎖
+            else:
+                disabled_cols = ["狀態", "生字", "原型", "中文", "英文", "日文", "西文", "例句"] # 鎖死除了播放鍵以外的所有欄位
+
             edited_df = st.data_editor(
                 display_df,
                 column_config={
                     "db_id": None, 
                     "🔊 播放": st.column_config.CheckboxColumn("🔊 播放", help="勾選即可聆聽"),
                     "狀態": st.column_config.SelectboxColumn(
-                        "狀態 (點擊修改)",
-                        help="選擇單字的學習狀態或將其徹底刪除",
+                        "狀態",
                         options=["🧠 學習中", "✅ 掌握", "⏸️ 暫停", "🗑️ 徹底刪除"],
                         required=True
                     )
                 },
-                # 注意 disabled 不要鎖定 "🔊 播放" 欄位
-                disabled=["生字", "原型", "中文", "英文", "日文", "西文", "例句"],
+                disabled=disabled_cols,
                 use_container_width=True,
                 hide_index=True
             )
             
-            # 【核心邏輯】智慧偵測「最新被勾選」的那一列
+            # 【發音邏輯】
             current_play_state = edited_df["🔊 播放"].to_dict()
             newly_checked_idx = None
 
             for idx, is_checked in current_play_state.items():
-                # 如果現在是 True，且之前記憶中是 False (或沒記錄)
                 was_checked = st.session_state.last_play_state.get(idx, False)
                 if is_checked and not was_checked:
                     newly_checked_idx = idx
                     break
 
-            # 更新記憶狀態供下一次比對
             st.session_state.last_play_state = current_play_state
 
-            # 【執行發音】
             if newly_checked_idx is not None:
-                # 🌟 關鍵修正 1：永遠從「背後完整的 df」抓取「生字」欄位！
-                # 這樣一來，不管使用者在畫面上隱藏了什麼欄位，都絕對不會發生 KeyError
-                text_to_read = df.loc[newly_checked_idx, "生字"]
+                # 核心改動：使用者選「日文」，就去讀「日文」那一欄的內容
+                text_to_read = edited_df.loc[newly_checked_idx, play_lang]
                 
-                if text_to_read and str(text_to_read).strip() != "":
-                    # 🌟 關鍵修正 2：根據你上方的選項，決定要用哪國口音來唸這個「生字」
+                if pd.notna(text_to_read) and str(text_to_read).strip() != "":
                     lang_map = {"日文": "ja", "英文": "en", "西文": "es"}
                     try:
                         tts = gTTS(text=str(text_to_read), lang=lang_map[play_lang])
                         fp = io.BytesIO()
                         tts.write_to_fp(fp)
                         fp.seek(0)
-                        # 隱藏式播放器，自動播放
                         st.audio(fp.read(), format="audio/mp3", autoplay=True)
                     except Exception as e:
                         st.toast(f"發音產生失敗：{e}")
                 else:
-                    st.toast("這個生字欄位是空的喔！")
+                    st.toast(f"這個單字的「{play_lang}」欄位是空的喔！")
+
             
-            # --- 儲存狀態變更邏輯 ---
-            if st.button("💾 儲存所有狀態變更", type="primary"):
-                with st.spinner("更新資料庫中..."):
-                    for index, row in edited_df.iterrows():
-                        orig_status = df.loc[index, "狀態"]
-                        new_status = row["狀態"]
-                        
-                        if orig_status != new_status:
-                            if new_status == "🗑️ 徹底刪除":
-                                supabase.table("vocabulary").delete().eq("id", row["db_id"]).execute()
-                            else:
-                                status_map = {"🧠 學習中": "learning", "✅ 掌握": "mastered", "⏸️ 暫停": "paused"}
-                                db_status = status_map.get(new_status, "learning")
-                                supabase.table("vocabulary").update({"status": db_status}).eq("id", row["db_id"]).execute()
+            # --- 全面儲存邏輯 (僅在編輯模式顯示) ---
+            if edit_mode:
+                if st.button("💾 儲存所有變更", type="primary"):
+                    with st.spinner("更新資料庫中..."):
+                        for index, row in edited_df.iterrows():
+                            # 建立一個字典來收集有被修改的欄位
+                            update_payload = {}
                             
-                    st.success("狀態已成功更新！")
-                    st.rerun() 
+                            # 1. 檢查狀態是否改變
+                            orig_status = df.loc[index, "狀態"]
+                            new_status = row.get("狀態", orig_status)
+                            if orig_status != new_status:
+                                if new_status == "🗑️ 徹底刪除":
+                                    supabase.table("vocabulary").delete().eq("id", row["db_id"]).execute()
+                                    continue # 刪除後不需執行後續更新
+                                else:
+                                    status_map = {"🧠 學習中": "learning", "✅ 掌握": "mastered", "⏸️ 暫停": "paused"}
+                                    update_payload["status"] = status_map.get(new_status, "learning")
+                            
+                            # 2. 檢查各文字欄位是否改變
+                            col_map = {
+                                "生字": "original_word", "原型": "prototype", 
+                                "中文": "trans_zh", "英文": "trans_en", 
+                                "日文": "trans_ja", "西文": "trans_es", "例句": "example_sentence"
+                            }
+                            for zh_col, db_col in col_map.items():
+                                if zh_col in row and row[zh_col] != df.loc[index, zh_col]:
+                                    update_payload[db_col] = row[zh_col]
+                            
+                            # 3. 若有任何改變，則寫入 Supabase
+                            if update_payload:
+                                supabase.table("vocabulary").update(update_payload).eq("id", row["db_id"]).execute()
+                                
+                        st.success("所有變更已成功更新！")
+                        st.rerun() 
         else:
             st.warning("請至少保留一個欄位以顯示表格。")
     else:
