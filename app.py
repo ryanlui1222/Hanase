@@ -5,6 +5,8 @@ from supabase import create_client
 import json
 import time
 import pandas as pd
+from gtts import gTTS
+import io
 
 # ==========================================
 # 1. 基礎配置與金鑰安全讀取
