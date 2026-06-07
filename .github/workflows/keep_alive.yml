@@ -1,0 +1,17 @@
+name: 🔄 Hanase Keep-Alive (防休眠打卡機)
+
+on:
+  schedule:
+    # 🕒 每 12 小時自動戳一次 (UTC 00:00 與 12:00，對應台灣時間 08:00 與 20:00)
+    - cron: '0 */12 * * *'
+  workflow_dispatch: # 允許您在 GitHub 網頁後台手動點擊按鈕立即觸發測試
+
+jobs:
+  ping_app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📡 發送空訪問戳醒 Hanase Streamlit 容器
+        run: |
+          echo "正在發送心跳訊號至 Hanase 雲端伺服器..."
+          curl -I -s https://hanasevocab.streamlit.app/
+          echo "✅ 打卡成功！Streamlit 已被喚醒並重置 7 天休眠倒數。"
