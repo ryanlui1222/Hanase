@@ -2,16 +2,24 @@ name: 🔄 Hanase Keep-Alive (防休眠打卡機)
 
 on:
   schedule:
-    # 🕒 每 12 小時自動戳一次 (UTC 00:00 與 12:00，對應台灣時間 08:00 與 20:00)
+    # 🕒 每 12 小時自動戳一次 (UTC 00:00 與 12:00)
     - cron: '0 */12 * * *'
-  workflow_dispatch: # 允許您在 GitHub 網頁後台手動點擊按鈕立即觸發測試
+  workflow_dispatch: # 允許手動觸發
 
 jobs:
   ping_app:
     runs-on: ubuntu-latest
     steps:
-      - name: 📡 發送空訪問戳醒 Hanase Streamlit 容器
+      - name: 📡 發送真實瀏覽器請求戳醒 Streamlit
         run: |
           echo "正在發送心跳訊號至 Hanase 雲端伺服器..."
-          curl -I -s https://hanasevocab.streamlit.app/
-          echo "✅ 打卡成功！Streamlit 已被喚醒並重置 7 天休眠倒數。"
+          
+          # 1. 敲擊主頁面：
+          # 拔掉 -I (改為完整獲取)，加入動態時間戳 (?ping=時間) 破除 CDN 快取，並偽裝成 Chrome 瀏覽器
+          curl -s -o /dev/null -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" "https://hanasevocab.streamlit.app/?ping=$(date +%s)"
+          
+          # 2. 敲擊底層伺服器 API (Streamlit 專屬後門)：
+          # 這是 Streamlit Tornado 伺服器專用的健康檢查端點，能強制喚醒後端 Python 容器
+          curl -s -o /dev/null -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "https://hanasevocab.streamlit.app/_stcore/health"
+          
+          echo "✅ 打卡成功！已模擬真實流量並穿透快取，Streamlit 已被強制喚醒。"
